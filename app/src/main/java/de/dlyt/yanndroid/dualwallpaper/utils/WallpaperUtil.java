@@ -5,11 +5,15 @@ import android.content.Context;
 import android.content.Intent;
 import android.graphics.Bitmap;
 import android.graphics.BitmapFactory;
+import android.graphics.Matrix;
 import android.graphics.Point;
+import android.graphics.RectF;
+import android.media.ExifInterface;
 import android.net.Uri;
 import android.os.Handler;
 import android.os.ParcelFileDescriptor;
 
+import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -73,27 +77,142 @@ public class WallpaperUtil {
     }
 
 
-    public void saveFromCurrent(WallpaperType type, SaveCallback callback) {
+    public interface ImportCallback {
+        void onImported(WallpaperType type);
+
+        void onError(Exception e);
+    }
+
+    /** Original, uncropped image the user picked. Used to (re)position the wallpaper. */
+    public String getOriginalPath(WallpaperType type) {
+        return getWallpaperTypePath(type) + "_original";
+    }
+
+    public boolean hasOriginal(WallpaperType type) {
+        return new File(getOriginalPath(type)).exists();
+    }
+
+    /** Deletes the wallpaper, its original and its saved position. */
+    public boolean deleteWallpaper(WallpaperType type) {
+        new File(getOriginalPath(type)).delete();
+        new Preferences(mContext).setCrop(type, null);
+        return new File(getWallpaperTypePath(type)).delete();
+    }
+
+    /** Copies the current system wallpaper as the original image for this type. */
+    public void importFromCurrent(WallpaperType type, ImportCallback callback) {
         try {
             ParcelFileDescriptor fileDescriptor = mWallpaperManager.getWallpaperFile(type.home ? WallpaperManager.FLAG_SYSTEM : WallpaperManager.FLAG_LOCK);
             if (fileDescriptor == null) throw new FileNotFoundException();
-
-            saveFromBitmap(streamToBitmap(new ParcelFileDescriptor.AutoCloseInputStream(fileDescriptor)), type, true, false, callback);
+            importOriginal(new ParcelFileDescriptor.AutoCloseInputStream(fileDescriptor), type, callback);
         } catch (SecurityException | FileNotFoundException e) {
             e.printStackTrace();
             callback.onError(e);
         }
     }
 
-    public void saveFromIntent(Intent intent, WallpaperType type, SaveCallback callback) {
+    /** Copies the image from a picker / share intent as the original image for this type. */
+    public void importFromIntent(Intent intent, WallpaperType type, ImportCallback callback) {
         try {
-            Uri data = intent.getData();
+            Uri data = intent == null ? null : intent.getData();
             if (data == null) throw new FileNotFoundException();
-            saveFromBitmap(streamToBitmap(mContext.getContentResolver().openInputStream(data)), type, true, false, callback);
-        } catch (FileNotFoundException e) {
+            importOriginal(mContext.getContentResolver().openInputStream(data), type, callback);
+        } catch (SecurityException | FileNotFoundException e) {
             e.printStackTrace();
             callback.onError(e);
         }
+    }
+
+    private void importOriginal(InputStream in, WallpaperType type, ImportCallback callback) {
+        Handler handler = new Handler();
+        new Thread(() -> {
+            File tmp = new File(getOriginalPath(type) + "_tmp");
+            try (InputStream input = in; FileOutputStream out = new FileOutputStream(tmp)) {
+                byte[] buffer = new byte[64 * 1024];
+                int read;
+                while ((read = input.read(buffer)) != -1) out.write(buffer, 0, read);
+            } catch (IOException e) {
+                e.printStackTrace();
+                tmp.delete();
+                handler.post(() -> callback.onError(e));
+                return;
+            }
+            if (BitmapFactory.decodeFile(tmp.getPath(), boundsOptions()).outWidth <= 0) {
+                tmp.delete();
+                handler.post(() -> callback.onError(new IOException("Not an image")));
+                return;
+            }
+            File original = new File(getOriginalPath(type));
+            original.delete();
+            tmp.renameTo(original);
+            new Preferences(mContext).setCrop(type, null);
+            handler.post(() -> callback.onImported(type));
+        }).start();
+    }
+
+    private static BitmapFactory.Options boundsOptions() {
+        BitmapFactory.Options o = new BitmapFactory.Options();
+        o.inJustDecodeBounds = true;
+        return o;
+    }
+
+    /**
+     * Loads the original image for editing: downsampled so neither side exceeds maxSide,
+     * and rotated according to its EXIF orientation. Call from a background thread.
+     */
+    public Bitmap loadOriginalBitmap(WallpaperType type, int maxSide) {
+        String path = getOriginalPath(type);
+        BitmapFactory.Options bounds = boundsOptions();
+        BitmapFactory.decodeFile(path, bounds);
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null;
+
+        int sample = 1;
+        while (Math.max(bounds.outWidth, bounds.outHeight) / (sample * 2) >= maxSide) sample *= 2;
+        BitmapFactory.Options opts = new BitmapFactory.Options();
+        opts.inSampleSize = sample;
+        Bitmap bitmap = BitmapFactory.decodeFile(path, opts);
+        if (bitmap == null) return null;
+
+        int rotation = 0;
+        boolean flip = false;
+        try {
+            int orientation = new ExifInterface(path).getAttributeInt(ExifInterface.TAG_ORIENTATION, ExifInterface.ORIENTATION_NORMAL);
+            switch (orientation) {
+                case ExifInterface.ORIENTATION_ROTATE_90: rotation = 90; break;
+                case ExifInterface.ORIENTATION_ROTATE_180: rotation = 180; break;
+                case ExifInterface.ORIENTATION_ROTATE_270: rotation = 270; break;
+                case ExifInterface.ORIENTATION_FLIP_HORIZONTAL: flip = true; break;
+                case ExifInterface.ORIENTATION_TRANSPOSE: rotation = 90; flip = true; break;
+                case ExifInterface.ORIENTATION_TRANSVERSE: rotation = 270; flip = true; break;
+                case ExifInterface.ORIENTATION_FLIP_VERTICAL: rotation = 180; flip = true; break;
+            }
+        } catch (IOException ignored) {
+        }
+        if (rotation == 0 && !flip) return bitmap;
+
+        Matrix m = new Matrix();
+        if (flip) m.postScale(-1, 1);
+        m.postRotate(rotation);
+        Bitmap rotated = Bitmap.createBitmap(bitmap, 0, 0, bitmap.getWidth(), bitmap.getHeight(), m, true);
+        if (rotated != bitmap) bitmap.recycle();
+        return rotated;
+    }
+
+    /**
+     * Saves the given area (in source bitmap pixels) of source, scaled to the screen size,
+     * as the wallpaper for this type and remembers the position for later adjustment.
+     */
+    public void saveCropped(Bitmap source, RectF cropRect, RectF normalizedCrop, WallpaperType type, SaveCallback callback) {
+        Point size = DeviceUtil.getDisplaySize(mContext);
+        int left = Math.max(0, Math.round(cropRect.left));
+        int top = Math.max(0, Math.round(cropRect.top));
+        int width = Math.max(1, Math.min(source.getWidth() - left, Math.round(cropRect.width())));
+        int height = Math.max(1, Math.min(source.getHeight() - top, Math.round(cropRect.height())));
+
+        Bitmap cropped = Bitmap.createBitmap(source, left, top, width, height);
+        Bitmap scaled = Bitmap.createScaledBitmap(cropped, size.x, size.y, true);
+        new Preferences(mContext).setCrop(type, normalizedCrop);
+        saveFromBitmap(scaled, type, false, false, callback);
     }
 
     public void saveFromBitmap(Bitmap bitmap, WallpaperType type, boolean scaleToScreen, boolean png, SaveCallback callback) {
@@ -124,10 +243,6 @@ public class WallpaperUtil {
             onFileChanged(type);
 
         }).start();
-    }
-
-    private Bitmap streamToBitmap(InputStream in) {
-        return BitmapFactory.decodeStream(in);
     }
 
     private Bitmap scaleToScreenSize(Bitmap bitmap) {

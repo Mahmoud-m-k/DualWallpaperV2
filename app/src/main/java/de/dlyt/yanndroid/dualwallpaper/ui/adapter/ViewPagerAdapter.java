@@ -111,7 +111,7 @@ public class ViewPagerAdapter extends RecyclerView.Adapter<ViewPagerAdapter.View
 
             @Override
             public void onDelete() {
-                if (wallpaperFile.delete()) updateImages(imageView, type);
+                if (mWallpaperUtil.deleteWallpaper(type)) updateImages(imageView, type);
             }
         }).show();
     }

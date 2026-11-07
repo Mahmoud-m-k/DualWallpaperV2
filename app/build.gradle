@@ -44,7 +44,10 @@ android {
     }
 }
 
-apply from: '../../_POEditor/dualwallpaper.gradle'
+// Translation sync config lives outside the repo on the author's machine; skip it when missing.
+if (file('../../_POEditor/dualwallpaper.gradle').exists()) {
+    apply from: '../../_POEditor/dualwallpaper.gradle'
+}
 
 configurations.all {
     exclude group: 'androidx.appcompat', module: 'appcompat'

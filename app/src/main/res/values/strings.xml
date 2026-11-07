@@ -14,6 +14,12 @@
     <string name="dialog_pick_new_image">"Pick new image"</string>
     <string name="dialog_plain_color">"Plain color"</string>
     <string name="dialog_set_wallpaper_as">"Set wallpaper as"</string>
+    <string name="dialog_adjust_position">"Adjust position"</string>
+
+    <string name="crop_hint">"Drag to move, pinch to zoom, double tap to reset"</string>
+    <string name="crop_cancel">"Cancel"</string>
+    <string name="crop_reset">"Reset"</string>
+    <string name="crop_done">"Done"</string>
     <string name="dialog_type_name_separator" translatable="false">"%s - %s"</string>
 
     <string name="preference_time_next_day">"%s next day"</string>

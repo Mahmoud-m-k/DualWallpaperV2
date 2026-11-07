@@ -30,6 +30,7 @@ import dev.oneuiproject.oneui.utils.ActivityUtils;
 public class MainActivity extends AppCompatActivity {
 
     public static final int PICKER_REQUEST_CODE = 5000;
+    public static final int CROP_REQUEST_CODE = 6000;
 
     private WallpaperUtil mWallpaperUtil;
     private ViewPagerAdapter mAdapter;
@@ -88,18 +89,28 @@ public class MainActivity extends AppCompatActivity {
     @Override
     protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
-        //TODO crop, scale > scaleToScreen=false
-        if (resultCode == RESULT_OK && requestCode >> 2 == PICKER_REQUEST_CODE >> 2) {
-            WallpaperType type = WallpaperType.values()[requestCode - PICKER_REQUEST_CODE];
-            saveWallpaperFromIntent(data, type);
+        if (resultCode != RESULT_OK) return;
+        int count = WallpaperType.values().length;
+        if (requestCode >= PICKER_REQUEST_CODE && requestCode < PICKER_REQUEST_CODE + count) {
+            saveWallpaperFromIntent(data, WallpaperType.values()[requestCode - PICKER_REQUEST_CODE]);
+        } else if (requestCode >= CROP_REQUEST_CODE && requestCode < CROP_REQUEST_CODE + count) {
+            WallpaperType type = WallpaperType.values()[requestCode - CROP_REQUEST_CODE];
+            mAdapter.notifyItemChanged(type.light ? 0 : 1);
         }
     }
 
+    /** Opens the screen where the user positions the original image of this wallpaper. */
+    public void openPositionEditor(WallpaperType type) {
+        Intent intent = new Intent(this, CropActivity.class);
+        intent.putExtra(CropActivity.EXTRA_TYPE_INDEX, type.index);
+        startActivityForResult(intent, CROP_REQUEST_CODE + type.index);
+    }
+
     private void saveWallpaperFromIntent(Intent intent, WallpaperType type) {
-        mWallpaperUtil.saveFromIntent(intent, type, new WallpaperUtil.SaveCallback() {
+        mWallpaperUtil.importFromIntent(intent, type, new WallpaperUtil.ImportCallback() {
             @Override
-            public void onSuccess(WallpaperType type) {
-                mAdapter.notifyItemChanged(type.light ? 0 : 1);
+            public void onImported(WallpaperType type) {
+                openPositionEditor(type);
             }
 
             @Override

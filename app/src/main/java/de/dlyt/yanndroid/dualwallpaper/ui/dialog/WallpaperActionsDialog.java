@@ -10,7 +10,10 @@ import android.widget.Toast;
 
 import androidx.appcompat.app.AlertDialog;
 
+import java.io.File;
 import java.io.FileNotFoundException;
+import java.util.ArrayList;
+import java.util.List;
 
 import de.dlyt.yanndroid.dualwallpaper.R;
 import de.dlyt.yanndroid.dualwallpaper.ui.activity.MainActivity;
@@ -39,27 +42,27 @@ public class WallpaperActionsDialog {
         this.mType = type;
         this.mCallback = callback;
 
+        List<CharSequence> items = new ArrayList<>();
+        List<Runnable> actions = new ArrayList<>();
+        if (mWallpaperUtil.hasOriginal(type)) {
+            items.add(mContext.getString(R.string.dialog_adjust_position));
+            actions.add(() -> ((MainActivity) mContext).openPositionEditor(mType));
+        }
+        items.add(mContext.getString(R.string.dialog_pick_new_image));
+        actions.add(this::actionPickNew);
+        items.add(mContext.getString(R.string.dialog_use_current));
+        actions.add(this::actionUseCurrent);
+        items.add(mContext.getString(R.string.dialog_plain_color));
+        actions.add(this::actionPlainColor);
+        items.add(mContext.getString(R.string.dialog_gradient_color));
+        actions.add(this::actionGradientColor);
+
         AlertDialog.Builder dialogBuilder = new AlertDialog.Builder(mContext)
                 .setTitle(mContext.getString(R.string.dialog_type_name_separator,
                         type.home ? mContext.getString(R.string.home_screen) : mContext.getString(R.string.lock_screen),
                         type.light ? mContext.getString(R.string.theme_light) : mContext.getString(R.string.theme_dark)))
                 .setNegativeButton(dev.oneuiproject.oneui.design.R.string.oui_common_cancel, null)
-                .setItems(R.array.select_dialog_actions, (dialog, which) -> {
-                    switch (which) {
-                        case 0:
-                            actionPickNew();
-                            break;
-                        case 1:
-                            actionUseCurrent();
-                            break;
-                        case 2:
-                            actionPlainColor();
-                            break;
-                        case 3:
-                            actionGradientColor();
-                            break;
-                    }
-                });
+                .setItems(items.toArray(new CharSequence[0]), (dialog, which) -> actions.get(which).run());
 
         if (deleteButton) {
             dialogBuilder.setPositiveButton(R.string.dialog_delete, (dialog, which) -> mCallback.onDelete());
@@ -76,10 +79,10 @@ public class WallpaperActionsDialog {
     }
 
     private void actionUseCurrent() {
-        mWallpaperUtil.saveFromCurrent(mType, new WallpaperUtil.SaveCallback() {
+        mWallpaperUtil.importFromCurrent(mType, new WallpaperUtil.ImportCallback() {
             @Override
-            public void onSuccess(WallpaperUtil.WallpaperType type) {
-                mCallback.onDone();
+            public void onImported(WallpaperUtil.WallpaperType type) {
+                ((MainActivity) mContext).openPositionEditor(type);
             }
 
             @Override
@@ -102,6 +105,11 @@ public class WallpaperActionsDialog {
         ((MainActivity) mContext).startActivityForResult(intent, MainActivity.PICKER_REQUEST_CODE + mType.index);
     }
 
+    /** Colors have nothing to position, so forget any previously picked image. */
+    private void clearOriginal() {
+        new File(mWallpaperUtil.getOriginalPath(mType)).delete();
+    }
+
     private void actionPlainColor() {
         int lastColor = Color.BLACK;
         Bitmap image = BitmapFactory.decodeFile(mWallpaperUtil.getWallpaperTypePath(mType));
@@ -110,6 +118,7 @@ public class WallpaperActionsDialog {
         new ColorPickerDialog(mContext, color -> mWallpaperUtil.saveFromBitmap(BitmapUtil.plainColor(DeviceUtil.getDisplaySize(mContext), color), mType, false, false, new WallpaperUtil.SaveCallback() {
             @Override
             public void onSuccess(WallpaperUtil.WallpaperType type) {
+                clearOriginal();
                 mCallback.onDone();
             }
 
@@ -124,6 +133,7 @@ public class WallpaperActionsDialog {
         new GradientPickerDialog(mContext, (startColor, endColor) -> mWallpaperUtil.saveFromBitmap(BitmapUtil.gradientColor(DeviceUtil.getDisplaySize(mContext), startColor, endColor), mType, false, true, new WallpaperUtil.SaveCallback() {
             @Override
             public void onSuccess(WallpaperUtil.WallpaperType type) {
+                clearOriginal();
                 mCallback.onDone();
             }
 
